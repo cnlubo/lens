@@ -39,29 +39,25 @@ export abstract class ClusterFeature {
     canUpgrade: false
   };
 
+  constructor(protected cluster: KubernetesCluster){}
+
   /**
    * to be implemented in the derived class, this method is typically called by Lens when a user has indicated that this feature is to be installed. The implementation
    * of this method should install kubernetes resources using the applyResources() method, or by directly accessing the kubernetes api (K8sApi)
-   *
-   * @param cluster the cluster that the feature is to be installed on
    */
-  abstract install(cluster: KubernetesCluster): Promise<void>;
+  abstract install(): Promise<void>;
 
   /**
    * to be implemented in the derived class, this method is typically called by Lens when a user has indicated that this feature is to be upgraded. The implementation
    * of this method should upgrade the kubernetes resources already installed, if relevant to the feature
-   *
-   * @param cluster the cluster that the feature is to be upgraded on
    */
-  abstract upgrade(cluster: KubernetesCluster): Promise<void>;
+  abstract upgrade(): Promise<void>;
 
   /**
    * to be implemented in the derived class, this method is typically called by Lens when a user has indicated that this feature is to be uninstalled. The implementation
    * of this method should uninstall kubernetes resources using the kubernetes api (K8sApi)
-   *
-   * @param cluster the cluster that the feature is to be uninstalled from
    */
-  abstract uninstall(cluster: KubernetesCluster): Promise<void>;
+  abstract uninstall(): Promise<void>;
 
   /**
    * to be implemented in the derived class, this method is called periodically by Lens to determine details about the feature's current status. The implementation
@@ -69,66 +65,70 @@ export abstract class ClusterFeature {
    * The installed field should be set to true if the feature has been installed, otherwise false. Also, Lens relies on the canUpgrade field to determine if the feature
    * can be upgraded so the implementation should set the canUpgrade field according to specific rules for the feature, if relevant.
    *
-   * @param cluster the cluster that the feature may be installed on
-   *
    * @return a promise, resolved with the updated ClusterFeatureStatus
    */
-  abstract updateStatus(cluster: KubernetesCluster): Promise<ClusterFeatureStatus>;
+  abstract updateStatus(): Promise<ClusterFeatureStatus>;
 
   /**
    * this is a helper method that conveniently applies kubernetes resources to the cluster.
    *
-   * @param cluster the cluster that the resources are to be applied to
    * @param resourceSpec as a string type this is a folder path that is searched for files specifying kubernetes resources. The files are read and if any of the resource
    * files are templated, the template parameters are filled using the templateContext field (See renderTemplate() method). Finally the resources are applied to the
    * cluster. As a string[] type resourceSpec is treated as an array of fully formed (not templated) kubernetes resources that are applied to the cluster
    */
-  protected async applyResources(cluster: KubernetesCluster, resourceSpec: string | string[]) {
-    let resources: string[];
-
-    const clusterModel = ClusterStore.getInstance().getById(cluster.metadata.uid);
+  protected async applyResources(resourceSpec: string | string[]) {
+    const clusterModel = ClusterStore.getInstance().getById(this.cluster.metadata.uid);
 
     if (!clusterModel) {
       throw new Error(`cluster not found`);
     }
 
-    if ( typeof resourceSpec === "string" ) {
-      resources = this.renderTemplates(resourceSpec);
-    } else {
-      resources = resourceSpec;
-    }
+    const resources = typeof resourceSpec === "string"
+      ? await this.renderTemplates(resourceSpec)
+      : resourceSpec;
 
     if (app) {
       await new ResourceApplier(clusterModel).kubectlApplyAll(resources);
     } else {
-      await requestMain(clusterKubectlApplyAllHandler, cluster.metadata.uid, resources);
+      await requestMain(clusterKubectlApplyAllHandler, this.cluster.metadata.uid, resources);
     }
   }
 
   /**
-   * this is a helper method that conveniently reads kubernetes resource files into a string array. It also fills templated resource files with the template parameter values
-   * specified by the templateContext field. Templated files must end with the extension '.hb' and the template syntax must be compatible with handlebars.js
-   *
+   * This is a helper method that conveniently reads kubernetes resource files
+   * into a string array. It also fills templated resource files with the
+   * template parameter values specified by the templateContext field. Templated
+   * files must end with the extension '.hb' and the template syntax must be
+   * compatible with handlebars.js.
    * @param folderPath this is a folder path that is searched for files defining kubernetes resources.
-   *
    * @return an array of strings, each string being the contents of a resource file found in the folder path. This can be passed directly to applyResources()
    */
-  protected renderTemplates(folderPath: string): string[] {
+  protected async renderTemplates(folderPath: string): Promise<string[]> {
+    logger.info(`[FEATURE]: render templates from ${folderPath}`);
+
+    const dirEntries = await fs.promises.readdir(folderPath, { withFileTypes: true });
+    const files: [string, Promise<string>][] = [];
+
+    for (const entry of dirEntries) {
+      if (entry.isFile()) {
+        files.push([
+          entry.name,
+          fs.promises.readFile(path.join(folderPath, entry.name), { encoding: "utf-8" }),
+        ]);
+      }
+    }
+
     const resources: string[] = [];
 
-    logger.info(`[FEATURE]: render templates from ${folderPath}`);
-    fs.readdirSync(folderPath).forEach(filename => {
-      const file = path.join(folderPath, filename);
-      const raw = fs.readFileSync(file);
+    for (const [name, contentsP] of files) {
+      const contents = await contentsP;
 
-      if (filename.endsWith(".hb")) {
-        const template = hb.compile(raw.toString());
-
-        resources.push(template(this.templateContext));
-      } else {
-        resources.push(raw.toString());
-      }
-    });
+      resources.push(
+        name.endsWith(".hb")
+          ? hb.compile(contents)(this.templateContext)
+          : contents
+      );
+    }
 
     return resources;
   }

@@ -50,12 +50,10 @@ if (ipcMain) {
     appEventBus.emit({name: "cluster", action: "kubectl-apply-all"});
     const cluster = ClusterStore.getInstance().getById(clusterId);
 
-    if (cluster) {
-      const applier = new ResourceApplier(cluster);
-
-      applier.kubectlApplyAll(resources);
-    } else {
-      throw `${clusterId} is not a valid cluster id`;
+    if (!cluster) {
+      throw new Error(`${clusterId} is not a valid cluster id`);
     }
+
+    return new ResourceApplier(cluster).kubectlApplyAll(resources);
   });
 }

@@ -1,16 +1,12 @@
 import React from "react";
 import { observer, disposeOnUnmount } from "mobx-react";
-import { prometheusProviders } from "../../../../common/prometheus-providers";
 import { Cluster } from "../../../../main/cluster";
 import { SubTitle } from "../../layout/sub-title";
 import { Select, SelectOption } from "../../select";
 import { Input } from "../../input";
-import { observable, computed, autorun } from "mobx";
-
-const options: SelectOption<string>[] = [
-  { value: "", label: "Auto detect" },
-  ...prometheusProviders.map(pp => ({value: pp.id, label: pp.name}))
-];
+import { observable, autorun, computed } from "mobx";
+import { MetricProviderInfo, metricsApi } from "../../../api/endpoints/metrics.api";
+import { Spinner } from "../../spinner";
 
 interface Props {
   cluster: Cluster;
@@ -20,11 +16,22 @@ interface Props {
 export class ClusterPrometheusSetting extends React.Component<Props> {
   @observable path = "";
   @observable provider = "";
+  @observable loading = true;
+  @observable loadedOptions: MetricProviderInfo[] = [];
 
-  @computed get canEditPrometheusPath() {
-    if (this.provider === "" || this.provider === "lens") return false;
+  @computed get options(): SelectOption<string>[] {
+    return [
+      { value: "", label: "Auto detect" },
+      ...this.loadedOptions.map(({ name, id }) => ({ value: id, label: name }))
+    ];
+  }
 
-    return true;
+  @computed get canEditPrometheusPath(): boolean {
+    return Boolean(
+      this.loadedOptions
+        .find(opt => opt.id === this.provider)
+        ?.isConfigurable
+    );
   }
 
   componentDidMount() {
@@ -47,6 +54,16 @@ export class ClusterPrometheusSetting extends React.Component<Props> {
         }
       })
     );
+
+    metricsApi
+      .getMetricProviders()
+      .then(values => {
+        this.loading = false;
+
+        if (values) {
+          this.loadedOptions = values;
+        }
+      });
   }
 
   parsePrometheusPath = () => {
@@ -87,15 +104,25 @@ export class ClusterPrometheusSetting extends React.Component<Props> {
           <a href="https://github.com/lensapp/lens/blob/master/troubleshooting/custom-prometheus.md" target="_blank" rel="noreferrer">guide</a>{" "}
           for possible configuration changes.
         </p>
-        <Select
-          value={this.provider}
-          onChange={({value}) => {
-            this.provider = value;
-            this.onSaveProvider();
-          }}
-          options={options}
-        />
-        <small className="hint">What query format is used to fetch metrics from Prometheus</small>
+        {
+          this.loading
+            ? (
+              <Spinner />
+            )
+            : (
+              <>
+                <Select
+                  value={this.provider}
+                  onChange={({ value }) => {
+                    this.provider = value;
+                    this.onSaveProvider();
+                  }}
+                  options={this.options}
+                />
+                <small className="hint">What query format is used to fetch metrics from Prometheus</small>
+              </>
+            )
+        }
         {this.canEditPrometheusPath && (
           <>
             <p>Prometheus service address.</p>

@@ -98,6 +98,7 @@ copy-extension-themes:
 src/extensions/npm/extensions/__mocks__:
 	cp -r __mocks__ src/extensions/npm/extensions/
 
+.PHONY: src/extensions/npm/extensions/dist
 src/extensions/npm/extensions/dist:
 	yarn compile:extension-types
 

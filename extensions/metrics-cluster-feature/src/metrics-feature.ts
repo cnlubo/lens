@@ -1,4 +1,4 @@
-import { ClusterFeature, Catalog, K8sApi } from "@k8slens/extensions";
+import { ClusterFeature, K8sApi } from "@k8slens/extensions";
 import semver from "semver";
 import * as path from "path";
 
@@ -49,9 +49,9 @@ export class MetricsFeature extends ClusterFeature.Feature {
     storageClass: null,
   };
 
-  async install(cluster: Catalog.KubernetesCluster): Promise<void> {
+  async install(): Promise<void> {
     // Check if there are storageclasses
-    const storageClassApi = K8sApi.forCluster(cluster, K8sApi.StorageClass);
+    const storageClassApi = K8sApi.forCluster(this.cluster, K8sApi.StorageClass);
     const scs = await storageClassApi.list();
 
     this.templateContext.persistence.enabled = scs.some(sc => (
@@ -59,16 +59,24 @@ export class MetricsFeature extends ClusterFeature.Feature {
       sc.metadata?.annotations?.["storageclass.beta.kubernetes.io/is-default-class"] === "true"
     ));
 
-    super.applyResources(cluster, path.join(__dirname, "../resources/"));
+    return super.applyResources(path.join(__dirname, "../resources/"));
   }
 
-  async upgrade(cluster: Catalog.KubernetesCluster): Promise<void> {
-    return this.install(cluster);
+  async upgrade(): Promise<void> {
+    return this.install();
   }
 
-  async updateStatus(cluster: Catalog.KubernetesCluster): Promise<ClusterFeature.FeatureStatus> {
+  previousUpdateTime?: number;
+
+  async updateStatus(): Promise<ClusterFeature.FeatureStatus> {
+    if (typeof this.previousUpdateTime === "number" && this.previousUpdateTime + 2_500 > Date.now()) {
+      return this.status;
+    }
+
+    this.previousUpdateTime = Date.now();
+
     try {
-      const statefulSet = K8sApi.forCluster(cluster, K8sApi.StatefulSet);
+      const statefulSet = K8sApi.forCluster(this.cluster, K8sApi.StatefulSet);
       const prometheus = await statefulSet.get({name: "prometheus", namespace: "lens-metrics"});
 
       if (prometheus?.kind) {
@@ -87,10 +95,10 @@ export class MetricsFeature extends ClusterFeature.Feature {
     return this.status;
   }
 
-  async uninstall(cluster: Catalog.KubernetesCluster): Promise<void> {
-    const namespaceApi = K8sApi.forCluster(cluster, K8sApi.Namespace);
-    const clusterRoleBindingApi = K8sApi.forCluster(cluster, K8sApi.ClusterRoleBinding);
-    const clusterRoleApi = K8sApi.forCluster(cluster, K8sApi.ClusterRole);
+  async uninstall(): Promise<void> {
+    const namespaceApi = K8sApi.forCluster(this.cluster, K8sApi.Namespace);
+    const clusterRoleBindingApi = K8sApi.forCluster(this.cluster, K8sApi.ClusterRoleBinding);
+    const clusterRoleApi = K8sApi.forCluster(this.cluster, K8sApi.ClusterRole);
 
     await namespaceApi.delete({name: "lens-metrics"});
     await clusterRoleBindingApi.delete({name: "lens-prometheus"});
